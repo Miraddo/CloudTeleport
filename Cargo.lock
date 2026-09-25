@@ -442,6 +442,7 @@ dependencies = [
  "tray-icon",
  "url",
  "uuid",
+ "winit",
  "winresource",
 ]
 

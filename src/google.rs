@@ -22,6 +22,39 @@ pub const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 /// Pseudo folder id used by the browser for "Shared with me".
 pub const SHARED_WITH_ME: &str = "sharedWithMe";
 
+/// OAuth client compiled into release builds (set `CLOUDTELEPORT_GOOGLE_CLIENT_ID` and
+/// `CLOUDTELEPORT_GOOGLE_CLIENT_SECRET` when building). With it, users only click
+/// "Sign in with Google". For installed apps Google does not treat the secret as confidential.
+pub fn builtin_client() -> Option<GoogleConfig> {
+    let id = option_env!("CLOUDTELEPORT_GOOGLE_CLIENT_ID")?.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(GoogleConfig {
+        client_id: id.to_string(),
+        client_secret: option_env!("CLOUDTELEPORT_GOOGLE_CLIENT_SECRET")
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    })
+}
+
+/// The OAuth client to use: the user's own if configured, otherwise the built-in one.
+pub fn effective_client(cfg: &GoogleConfig) -> Option<GoogleConfig> {
+    if !cfg.client_id.trim().is_empty() {
+        return Some(cfg.clone());
+    }
+    builtin_client()
+}
+
+/// The client that issued the tokens (refreshing requires the same client).
+fn client_for_tokens(cfg: &GoogleConfig, client_id: &str) -> Option<GoogleConfig> {
+    match builtin_client() {
+        Some(builtin) if !client_id.is_empty() && builtin.client_id == client_id => Some(builtin),
+        _ => effective_client(cfg),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveFile {
@@ -82,6 +115,8 @@ pub struct Google {
     tokens: tokio::sync::Mutex<Option<GoogleTokens>>,
     /// Cached so the UI can read it without waiting for a token refresh.
     account: parking_lot::Mutex<Option<String>>,
+    /// Consent page URL while a sign-in is in progress, to open manually if needed.
+    pending_auth_url: parking_lot::Mutex<Option<String>>,
 }
 
 impl Google {
@@ -93,12 +128,18 @@ impl Google {
             tokens_path,
             tokens: tokio::sync::Mutex::new(tokens),
             account,
+            pending_auth_url: parking_lot::Mutex::new(None),
         }
     }
 
     /// The e-mail of the signed-in account, if any.
     pub fn account(&self) -> Option<String> {
         self.account.lock().clone()
+    }
+
+    /// The consent page of the sign-in in progress.
+    pub fn pending_auth_url(&self) -> Option<String> {
+        self.pending_auth_url.lock().clone()
     }
 
     pub async fn is_signed_in(&self) -> bool {
@@ -113,9 +154,8 @@ impl Google {
 
     /// Runs the browser consent flow and stores the resulting tokens. Returns the account e-mail.
     pub async fn sign_in(&self, cfg: &GoogleConfig) -> Result<String> {
-        if cfg.client_id.trim().is_empty() {
-            bail!("enter the Google OAuth client ID in Settings first");
-        }
+        let cfg = &effective_client(cfg)
+            .ok_or_else(|| anyhow!("enter the Google OAuth client ID in Settings first"))?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let redirect_uri = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
 
@@ -138,11 +178,15 @@ impl Google {
                 ("state", &state),
             ],
         )?;
-        open::that(auth_url.as_str()).context("could not open the web browser")?;
+        if let Err(e) = open::that(auth_url.as_str()) {
+            tracing::warn!("could not open the web browser: {e}");
+        }
+        *self.pending_auth_url.lock() = Some(auth_url.to_string());
 
-        let code = tokio::time::timeout(Duration::from_secs(300), wait_for_code(&listener, &state))
-            .await
-            .map_err(|_| anyhow!("timed out waiting for the Google sign-in"))??;
+        let code =
+            tokio::time::timeout(Duration::from_secs(300), wait_for_code(&listener, &state)).await;
+        *self.pending_auth_url.lock() = None;
+        let code = code.map_err(|_| anyhow!("timed out waiting for the Google sign-in"))??;
 
         let resp: TokenResponse = check(
             self.http
@@ -170,6 +214,7 @@ impl Google {
             refresh_token,
             expires_at: Utc::now() + chrono::Duration::seconds(resp.expires_in - 60),
             account: String::new(),
+            client_id: cfg.client_id.trim().to_string(),
         };
         tokens.account = self
             .fetch_account(&tokens.access_token)
@@ -220,6 +265,8 @@ impl Google {
         if tokens.expires_at > Utc::now() {
             return Ok(tokens.access_token.clone());
         }
+        let cfg = &client_for_tokens(cfg, &tokens.client_id)
+            .ok_or_else(|| anyhow!("no Google OAuth client configured"))?;
         let resp: TokenResponse = check(
             self.http
                 .post(TOKEN_URL)
@@ -399,7 +446,7 @@ async fn wait_for_code(listener: &TcpListener, expected_state: &str) -> Result<S
         let (result, message) = match (param("code"), param("error")) {
             (Some(code), _) if param("state").as_deref() == Some(expected_state) => (
                 Some(Ok(code)),
-                "Signed in! You can close this tab and return to CloudTeleport.",
+                "Access granted. You can close this tab and return to CloudTeleport.",
             ),
             (_, Some(err)) => (
                 Some(Err(anyhow!("Google sign-in failed: {err}"))),

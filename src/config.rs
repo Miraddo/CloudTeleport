@@ -139,6 +139,9 @@ pub struct GoogleTokens {
     pub expires_at: DateTime<Utc>,
     #[serde(default)]
     pub account: String,
+    /// OAuth client that issued the tokens.
+    #[serde(default)]
+    pub client_id: String,
 }
 
 /// What has already been forwarded, per route.

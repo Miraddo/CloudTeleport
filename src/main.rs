@@ -47,6 +47,7 @@ fn main() -> Result<()> {
             .with_min_inner_size([720.0, 480.0])
             .with_icon(icon::window_icon())
             .with_visible(!start_hidden),
+        event_loop_builder: linux_backend_hook(),
         ..Default::default()
     };
 
@@ -64,4 +65,25 @@ fn main() -> Result<()> {
 
     runtime.shutdown_timeout(std::time::Duration::from_secs(2));
     Ok(())
+}
+
+/// On Linux, prefer X11 (XWayland on Wayland desktops). Wayland does not let apps hide
+/// their window, which "close to tray" relies on. Set `CLOUDTELEPORT_WAYLAND=1` to use
+/// native Wayland anyway.
+#[cfg(target_os = "linux")]
+fn linux_backend_hook() -> Option<eframe::EventLoopBuilderHook> {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    let has_x11 = std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty());
+    let force_wayland = std::env::var_os("CLOUDTELEPORT_WAYLAND").is_some_and(|v| v != "0");
+    if !has_x11 || force_wayland {
+        return None;
+    }
+    Some(Box::new(|builder| {
+        builder.with_x11();
+    }))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_backend_hook() -> Option<eframe::EventLoopBuilderHook> {
+    None
 }

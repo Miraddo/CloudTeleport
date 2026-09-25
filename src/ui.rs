@@ -212,7 +212,11 @@ impl App {
     fn dashboard(&mut self, ui: &mut egui::Ui) {
         let cfg = self.core.config.read().clone();
         let signed_in = self.core.google.account();
-        let status = self.core.status.lock();
+        // Copy what we need so the lock is not held while drawing (the worker logs through it).
+        let (total_sent, last_sync, next_sync) = {
+            let status = self.core.status.lock();
+            (status.total_sent, status.last_sync, status.next_sync)
+        };
 
         ui.heading("Dashboard");
         ui.add_space(8.0);
@@ -222,12 +226,11 @@ impl App {
                 "Active routes",
                 cfg.routes.iter().filter(|r| r.enabled).count().to_string(),
             );
-            stat(ui, "Files sent", status.total_sent.to_string());
+            stat(ui, "Files sent", total_sent.to_string());
             stat(
                 ui,
                 "Last check",
-                status
-                    .last_sync
+                last_sync
                     .map(|t| t.format("%H:%M:%S").to_string())
                     .unwrap_or("—".into()),
             );
@@ -237,8 +240,7 @@ impl App {
                 if cfg.paused {
                     "paused".into()
                 } else {
-                    status
-                        .next_sync
+                    next_sync
                         .map(|t| t.format("%H:%M:%S").to_string())
                         .unwrap_or("—".into())
                 },
@@ -280,7 +282,7 @@ impl App {
                 }
             });
         });
-        let status = status; // keep the lock for rendering the log
+        let status = self.core.status.lock();
         card(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
@@ -559,35 +561,15 @@ impl App {
     }
 
     fn google_settings(&mut self, ui: &mut egui::Ui) {
+        let builtin = google::builtin_client().is_some();
         card(ui, |ui| {
             ui.label(RichText::new("Google Drive").strong().size(16.0));
-            egui::CollapsingHeader::new("How to get an OAuth client ID").show(ui, |ui| {
+            if builtin {
                 ui.label(
-                    "1. Open console.cloud.google.com, create a project and enable the “Google Drive API”.\n\
-                     2. Configure the OAuth consent screen (External, add yourself as a test user).\n\
-                     3. Credentials → Create credentials → OAuth client ID → Application type “Desktop app”.\n\
-                     4. Paste the client ID and client secret below, save, then click “Sign in”.",
+                    "Click “Sign in with Google” and allow CloudTeleport to read your Drive \
+                     (read-only). Your browser opens Google's consent page.",
                 );
-                ui.hyperlink_to("Open Google Cloud Console", "https://console.cloud.google.com/apis/credentials");
-            });
-            egui::Grid::new("google")
-                .num_columns(2)
-                .spacing([12.0, 8.0])
-                .show(ui, |ui| {
-                    ui.label("Client ID");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.draft.google.client_id)
-                            .desired_width(380.0),
-                    );
-                    ui.end_row();
-                    ui.label("Client secret");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.draft.google.client_secret)
-                            .password(true)
-                            .desired_width(380.0),
-                    );
-                    ui.end_row();
-                });
+            }
             ui.add_space(4.0);
             ui.horizontal(|ui| match self.core.google.account() {
                 Some(account) => {
@@ -602,14 +584,35 @@ impl App {
                 }
                 None if self.sign_in.is_some() => {
                     ui.spinner();
-                    ui.label("Complete the sign-in in your web browser…");
+                    ui.label("Waiting for you to allow access in your web browser…");
+                    if let Some(url) = self.core.google.pending_auth_url() {
+                        if ui
+                            .small_button("Copy link")
+                            .on_hover_text("Browser didn't open? Paste this link into it.")
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(url);
+                        }
+                    }
+                    if ui.small_button("Cancel").clicked() {
+                        self.sign_in = None;
+                    }
                 }
                 None => {
                     let saved = self.core.config.read().google.clone();
-                    let ready = !saved.client_id.trim().is_empty();
+                    let ready = google::effective_client(&saved).is_some();
+                    let button = egui::Button::new(
+                        RichText::new("🔑  Sign in with Google").strong().size(15.0),
+                    )
+                    .fill(if ready {
+                        ACCENT
+                    } else {
+                        ui.visuals().widgets.inactive.bg_fill
+                    })
+                    .min_size(egui::vec2(220.0, 34.0));
                     if ui
-                        .add_enabled(ready, egui::Button::new("🔑 Sign in with Google"))
-                        .on_disabled_hover_text("Enter and save the client ID first")
+                        .add_enabled(ready, button)
+                        .on_disabled_hover_text("Enter and save your OAuth client ID below first")
                         .clicked()
                     {
                         let core = self.core.clone();
@@ -620,6 +623,52 @@ impl App {
                     }
                 }
             });
+            ui.add_space(4.0);
+
+            let own_client = |ui: &mut egui::Ui, draft: &mut AppConfig| {
+                ui.label(
+                    "1. Open console.cloud.google.com, create a project and enable the “Google Drive API”.\n\
+                     2. Configure the OAuth consent screen (External, add yourself as a test user).\n\
+                     3. Credentials → Create credentials → OAuth client ID → Application type “Desktop app”.\n\
+                     4. Paste the client ID and client secret below, save, then click “Sign in with Google”.",
+                );
+                ui.hyperlink_to(
+                    "Open Google Cloud Console",
+                    "https://console.cloud.google.com/apis/credentials",
+                );
+                egui::Grid::new("google")
+                    .num_columns(2)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Client ID");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut draft.google.client_id)
+                                .desired_width(380.0),
+                        );
+                        ui.end_row();
+                        ui.label("Client secret");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut draft.google.client_secret)
+                                .password(true)
+                                .desired_width(380.0),
+                        );
+                        ui.end_row();
+                    });
+            };
+            if builtin {
+                egui::CollapsingHeader::new("Advanced: use your own Google OAuth client").show(
+                    ui,
+                    |ui| {
+                        ui.weak("Leave empty to use CloudTeleport's built-in client.");
+                        own_client(ui, &mut self.draft);
+                    },
+                );
+            } else {
+                ui.weak(
+                    "This build has no built-in Google client, so it needs your own OAuth client:",
+                );
+                own_client(ui, &mut self.draft);
+            }
         });
     }
 

@@ -47,19 +47,21 @@ cargo run --release
 
 On GNOME, the tray icon only appears if the *AppIndicator and KStatusNotifierItem Support* extension is installed.
 
+On Wayland desktops, the app runs through XWayland because Wayland doesn't allow apps to hide their own window, which "close to tray" needs. Set `CLOUDTELEPORT_WAYLAND=1` to use native Wayland instead; hiding to the tray then won't work.
+
 
 ## Setup
 
 ### 1. Google Drive
 
-CloudTeleport reads your Drive through your own Google OAuth client, so your data never passes through a third party.
+Open **Settings** and click **Sign in with Google**. Your browser opens Google's consent page; allow read-only access to your Drive (`drive.readonly`) and return to the app. Files go straight from Google to your computer and then to Telegram; no other server is involved.
+
+Release builds from this repository include a built-in Google OAuth client. If you build the app yourself without one, or want to use your own client, expand **Advanced: use your own Google OAuth client** in Settings:
 
 1. Open the [Google Cloud Console](https://console.cloud.google.com/), create a project and enable the **Google Drive API**.
 2. Configure the **OAuth consent screen**: choose External and add your Google account as a test user.
 3. Go to **Credentials → Create credentials → OAuth client ID** and choose the application type **Desktop app**.
-4. In CloudTeleport, open **Settings**, paste the client ID and client secret, click **Save settings**, then click **Sign in with Google**.
-
-The app requests the read-only scope `drive.readonly`.
+4. Paste the client ID and client secret, click **Save settings**, then click **Sign in with Google**.
 
 ### 2. Telegram bot
 
@@ -104,6 +106,28 @@ On Unix, these files are created readable only by your user.
 ## How syncing works
 
 On each check, every enabled route lists its folder. Files it hasn't handled before are sent, oldest first. A file that fails 3 times in a row is skipped and the error is logged on the Dashboard. Each file id is recorded as soon as it's sent, so restarting the app doesn't send duplicates.
+
+## Built-in Google sign-in (for maintainers)
+
+The one-click sign-in uses an OAuth client that is compiled into the binary from two environment variables:
+
+```sh
+CLOUDTELEPORT_GOOGLE_CLIENT_ID=xxxx.apps.googleusercontent.com \
+CLOUDTELEPORT_GOOGLE_CLIENT_SECRET=xxxx \
+cargo build --release
+```
+
+The release workflow reads them from the repository secrets `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. To set this up:
+
+1. Create a **Desktop app** OAuth client as described in *Setup → Google Drive* above.
+2. Add its ID and secret under **Settings → Secrets and variables → Actions** in the GitHub repository.
+
+For desktop apps, Google does not treat the client secret as confidential: it ships inside the app, and the sign-in is protected by PKCE and the loopback redirect instead.
+
+Before other people use it, check the consent screen settings in Google Cloud Console:
+
+- **Publishing status.** While the app is in *Testing*, only the test users you add (up to 100) can sign in, and their sign-in expires after 7 days. Set it to *In production* to avoid this.
+- **Verification.** `drive.readonly` is a *restricted* scope. Until Google verifies the app, users see a "Google hasn't verified this app" warning (they can continue via **Advanced**), and the app is limited to 100 users. Removing those limits requires Google's verification, including a security assessment for restricted scopes.
 
 ## CI/CD
 
