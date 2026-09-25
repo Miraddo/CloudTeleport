@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=CloudTeleport
+GenericName=Drive to Telegram
+Comment=Forward files from Google Drive to Telegram chats, groups and channels
+Exec=cloudteleport
+Icon=cloudteleport
+Terminal=false
+Categories=Network;FileTransfer;Utility;
+StartupWMClass=cloudteleport
+Keywords=google;drive;telegram;share;sync;

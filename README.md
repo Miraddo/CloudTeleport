@@ -12,6 +12,18 @@ A small desktop app, written in Rust, that forwards files from **Google Drive** 
 
 Built with [egui/eframe](https://github.com/emilk/egui) for the UI, [tray-icon](https://github.com/tauri-apps/tray-icon) for the tray and [tokio](https://tokio.rs) for the background worker.
 
+## Download
+
+Prebuilt packages are attached to each [GitHub release](https://github.com/Miraddo/CloudTeleport/releases):
+
+| Platform | File |
+|---|---|
+| Windows (x86_64) | `CloudTeleport-<version>-windows-x86_64.exe` (portable) or `.zip` |
+| macOS (Apple Silicon + Intel) | `CloudTeleport-<version>-macos-universal.dmg` |
+| Linux (x86_64, aarch64) | `cloudteleport_<version>_<arch>.deb` or `.tar.gz` |
+
+The macOS app is signed ad-hoc but not notarized. The first time you open it, right-click the app and choose **Open**, or run `xattr -dr com.apple.quarantine /Applications/CloudTeleport.app`. Windows SmartScreen may also warn about an unsigned app; click **More info → Run anyway**.
+
 ## Building
 
 Install Rust 1.95 or newer from <https://rustup.rs>.
@@ -35,7 +47,6 @@ cargo run --release
 
 On GNOME, the tray icon only appears if the *AppIndicator and KStatusNotifierItem Support* extension is installed.
 
-To create an installable bundle (`.app`, `.deb`, `.msi`), run `cargo install cargo-bundle && cargo bundle --release`.
 
 ## Setup
 
@@ -93,6 +104,17 @@ On Unix, these files are created readable only by your user.
 ## How syncing works
 
 On each check, every enabled route lists its folder. Files it hasn't handled before are sent, oldest first. A file that fails 3 times in a row is skipped and the error is logged on the Dashboard. Each file id is recorded as soon as it's sent, so restarting the app doesn't send duplicates.
+
+## CI/CD
+
+- **CI** (`.github/workflows/ci.yml`) runs on every push and pull request. It checks formatting, then runs clippy and the tests on Linux, Windows and macOS.
+- **Release** (`.github/workflows/release.yml`) builds the packages listed under *Download* for every platform.
+  - Push a version tag to publish a GitHub release. The tag must match the `version` in `Cargo.toml`:
+    ```sh
+    git tag v0.1.0
+    git push origin v0.1.0
+    ```
+  - Or run the workflow manually from the Actions tab. The packages are then available as workflow artifacts instead of a release.
 
 ## Development
 

@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Forward files from Google Drive to Telegram chats, channels and groups — with a desktop UI and a system tray icon."
 license = "MIT"
+repository = "https://github.com/Miraddo/CloudTeleport"
+build = "build.rs"
 
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
@@ -35,9 +37,21 @@ opt-level = 3
 lto = "thin"
 strip = true
 
-# `cargo install cargo-bundle && cargo bundle --release` builds a .app / .deb / .msi.
-[package.metadata.bundle]
-name = "CloudTeleport"
-identifier = "dev.cloudteleport.CloudTeleport"
-category = "public.app-category.productivity"
-short_description = "Forward Google Drive files to Telegram"
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# Debian package, built with `cargo deb` (see .github/workflows/release.yml).
+[package.metadata.deb]
+maintainer = "Miraddo"
+copyright = "CloudTeleport contributors"
+section = "net"
+priority = "optional"
+extended-description = "Desktop app that forwards files from Google Drive folders to Telegram channels, groups and chats, running in the background with a system tray icon."
+# libayatana-appindicator is loaded at runtime, so it is not detected automatically.
+depends = "$auto, libayatana-appindicator3-1"
+assets = [
+    ["target/release/cloudteleport", "usr/bin/", "755"],
+    ["packaging/linux/cloudteleport.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/cloudteleport.png", "644"],
+    ["README.md", "usr/share/doc/cloudteleport/README.md", "644"],
+]
